@@ -11,6 +11,7 @@ import android.os.Environment
 import android.util.Base64
 import android.util.Log
 import com.abk.kernel.data.model.RootGrantApp
+import com.abk.kernel.data.model.ROOT_PROFILE_FLAG_NO_NEW_PRIVS
 import com.abk.kernel.data.model.RootGrantProfile
 import com.topjohnwu.superuser.CallbackList
 import com.topjohnwu.superuser.Shell
@@ -726,23 +727,41 @@ object RootUtils {
         val packageManager = context.packageManager
         val apps = installedApplications(packageManager)
         val grantedUids = AbkKsuNative.grantedUids()
+        return prepareRootGrantAppsForDisplay(
+            apps = apps
+                .asSequence()
+                .filter { it.packageName.isNotBlank() }
+                .mapNotNull { appInfo ->
+                    val packageName = appInfo.packageName ?: return@mapNotNull null
+                    val uid = appInfo.uid
+                    RootGrantApp(
+                        packageName = packageName,
+                        label = runCatching {
+                            packageManager.getApplicationLabel(appInfo).toString()
+                        }.getOrDefault(packageName),
+                        uid = uid,
+                        userName = AbkKsuNative.userName(uid),
+                        isSystemApp = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0,
+                        profile = buildRootGrantListProfile(packageName, uid, grantedUids)
+                    )
+                }
+                .toList(),
+            selfPackageName = context.packageName
+        )
+    }
+
+    internal fun prepareRootGrantAppsForDisplay(
+        apps: List<RootGrantApp>,
+        selfPackageName: String
+    ): List<RootGrantApp> {
+        val cleanSelfPackage = selfPackageName.trim()
         return apps
             .asSequence()
-            .filter { it.packageName.isNotBlank() }
-            .mapNotNull { appInfo ->
-                val packageName = appInfo.packageName ?: return@mapNotNull null
-                val uid = appInfo.uid
-                RootGrantApp(
-                    packageName = packageName,
-                    label = runCatching {
-                        packageManager.getApplicationLabel(appInfo).toString()
-                    }.getOrDefault(packageName),
-                    uid = uid,
-                    userName = AbkKsuNative.userName(uid),
-                    isSystemApp = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0,
-                    profile = buildRootGrantListProfile(packageName, uid, grantedUids)
-                )
+            .filterNot {
+                cleanSelfPackage.isNotBlank() &&
+                    it.packageName.equals(cleanSelfPackage, ignoreCase = true)
             }
+            .filter { it.packageName.isNotBlank() }
             .distinctBy { "${it.uid}:${it.packageName}" }
             .sortedWith(
                 compareByDescending<RootGrantApp> { it.profile.allowSu }
@@ -767,7 +786,8 @@ object RootUtils {
     ): RootGrantProfile = RootGrantProfile(
         name = packageName,
         currentUid = uid,
-        allowSu = uid in grantedUids
+        allowSu = uid in grantedUids,
+        flags = ROOT_PROFILE_FLAG_NO_NEW_PRIVS
     )
 
     fun readKsuFeature(featureName: String): KsuFeatureState {
